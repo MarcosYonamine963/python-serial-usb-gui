@@ -1,222 +1,221 @@
-# -*- coding: utf-8 -*-
 import sys
-import math
-import re
-from PyQt5 import QtWidgets, QtCore, QtGui
+from PyQt5.QtWidgets import (
+    QApplication, QMainWindow, QPushButton, QTextEdit, QVBoxLayout, QWidget, 
+    QComboBox, QLineEdit, QHBoxLayout, QRadioButton, QLabel
+)
 from PyQt5.QtSerialPort import QSerialPort, QSerialPortInfo
+from PyQt5.QtCore import Qt
 
-class SerialMonitor(QtWidgets.QMainWindow):
+class SerialCommunication(QMainWindow):
     def __init__(self):
-        super(SerialMonitor, self).__init__()
-        self.port = QSerialPort()
-        self.serialDataView = SerialDataView(self)
-        self.serialSendView = SerialSendView(self)
+        super().__init__()
 
-        self.setCentralWidget( QtWidgets.QWidget(self) )
-        layout = QtWidgets.QVBoxLayout( self.centralWidget() )
-        layout.addWidget(self.serialDataView)
-        layout.addWidget(self.serialSendView)
-        layout.setContentsMargins(3, 3, 3, 3)
-        self.setWindowTitle('Serial Monitor')
+        self.display_as_hex = True
+        self.is_connected = False
 
-        ### Tool Bar ###
-        self.toolBar = ToolBar(self)
-        self.addToolBar(self.toolBar)
+        self.predefined_data = {
+            "ACK": "4F4B0D",
+            "Requisitar Status": "02556C32",
+            "Requisitar Número de Série": "025EDD59",
+            "Testar Buzzer": "02611AE5",
+            "Habilitar Login": "025901CA66",
+            "Habilitar Logout": "025601DA58",
+            "Desabilitar Login": "025900DA47",
+            "Desabilitar Logout": "025600CA79",
+            "Habilitar ACK de Comandos": "0262011309",
+            "Desabilitar ACK de Comandos": "0262000328",
+            "Habilitar ACK comandos AT": "0263012038",
+            "Desabilitar ACK comandos AT": "0263003019",
+            "Resetar Módulo": "025FCD78",
+            "Restaurar ao Padrão de Fábrica": "025A9DDD"
+        }
 
-        ### Status Bar ###
-        self.setStatusBar( QtWidgets.QStatusBar(self) )
-        self.statusText = QtWidgets.QLabel(self)
-        self.statusBar().addWidget( self.statusText )
-        
-        ### Signal Connect ###
-        self.toolBar.portOpenButton.clicked.connect(self.portOpen)
-        self.serialSendView.serialSendSignal.connect(self.sendFromPort)
-        self.port.readyRead.connect(self.readFromPort)
+        self.initUI()
+        self.serial_port = QSerialPort()
+        self.serial_port.readyRead.connect(self.receive_data)
 
-    def portOpen(self, flag):
-        if flag:
-            self.port.setBaudRate( self.toolBar.baudRate() )
-            self.port.setPortName( self.toolBar.portName() )
-            self.port.setDataBits( self.toolBar.dataBit() )
-            self.port.setParity( self.toolBar.parity() )
-            self.port.setStopBits( self.toolBar.stopBit() )
-            self.port.setFlowControl( self.toolBar.flowControl() )
-            r = self.port.open(QtCore.QIODevice.ReadWrite)
-            if not r:
-                self.statusText.setText('Port open error')
-                self.toolBar.portOpenButton.setChecked(False)
-                self.toolBar.serialControlEnable(True)
-            else:
-                self.statusText.setText('Port opened')
-                self.toolBar.serialControlEnable(False)
+    def initUI(self):
+        self.setWindowTitle("Serial Communication")
+        self.setGeometry(100, 100, 600, 400)
+
+        self.text_edit = QTextEdit(self)
+        self.text_edit.setReadOnly(True)
+
+        self.text_edit_ascii = QTextEdit(self)
+        self.text_edit_ascii.setReadOnly(True)
+
+        self.text_edit_hex = QTextEdit(self)
+        self.text_edit_hex.setReadOnly(True)
+
+        self.send_button = QPushButton("Enviar", self)
+        self.send_button.clicked.connect(self.send_data)
+
+        self.connect_button = QPushButton("Conectar", self)
+        self.connect_button.clicked.connect(self.connect_port)
+
+        self.refresh_button = QPushButton("Atualizar Portas", self)
+        self.refresh_button.clicked.connect(self.populate_ports_list)
+
+        self.disconnect_button = QPushButton("Desconectar", self)
+        self.disconnect_button.clicked.connect(self.disconnect_all_ports)
+
+        self.clear_button = QPushButton("Limpar Texto", self)
+        self.clear_button.clicked.connect(self.clear_text_edit)
+
+        self.port_combobox = QComboBox(self)
+        self.populate_ports_list()
+
+        self.data_input = QLineEdit(self)
+        self.data_input.returnPressed.connect(self.send_data_enter_pressed)
+
+        self.ascii_radio = QRadioButton("ASCII", self)
+        self.hex_radio = QRadioButton("Hexadecimal", self)
+        self.hex_radio.setChecked(True)
+
+        self.ascii_radio.toggled.connect(self.update_display_format)
+        self.hex_radio.toggled.connect(self.update_display_format)
+
+        send_layout = QHBoxLayout()
+        send_layout.addWidget(self.data_input)
+        send_layout.addWidget(self.ascii_radio)
+        send_layout.addWidget(self.hex_radio)
+        send_layout.addWidget(self.send_button)
+
+        config_btns_layout = QHBoxLayout()
+        config_btns_layout.addWidget(self.port_combobox)
+        config_btns_layout.addWidget(self.connect_button)
+        config_btns_layout.addWidget(self.disconnect_button)
+        config_btns_layout.addWidget(self.refresh_button)
+        config_btns_layout.addWidget(self.clear_button)
+
+        text_edit_layout = QVBoxLayout()
+        text_edit_layout.addWidget(self.text_edit)
+        text_edit_layout.addWidget(self.text_edit_ascii)
+        text_edit_layout.addWidget(self.text_edit_hex)
+        text_edit_layout.addLayout(send_layout)
+
+        h_layout = QHBoxLayout()
+        h_layout.addLayout(text_edit_layout)
+
+        self.predefined_buttons_layout = QVBoxLayout()
+        h_layout.addLayout(self.predefined_buttons_layout)
+
+        layout = QVBoxLayout()
+        layout.addLayout(config_btns_layout)
+        layout.addLayout(h_layout)
+
+        container = QWidget()
+        container.setLayout(layout)
+
+        self.setCentralWidget(container)
+
+        for label, data in self.predefined_data.items():
+            self.add_predefined_data_button(label, data)
+
+    def add_predefined_data_button(self, label, data):
+        button = QPushButton(label, self)
+        button.clicked.connect(lambda: self.send_predefined_data(data))
+        self.predefined_buttons_layout.addWidget(button)
+
+    def populate_ports_list(self):
+        self.port_combobox.clear()
+        available_ports = QSerialPortInfo.availablePorts()
+        for port_info in available_ports:
+            self.port_combobox.addItem(port_info.portName())
+
+        self.update_connection_status()
+
+    def update_connection_status(self):
+        if self.is_connected:
+            self.connect_button.setEnabled(False)
+            self.disconnect_button.setEnabled(True)
         else:
-            self.port.close()
-            self.statusText.setText('Port closed')
-            self.toolBar.serialControlEnable(True)
-        
-    def readFromPort(self):
-        data = self.port.readAll()
-        if len(data) > 0:
-            self.serialDataView.appendSerialText( QtCore.QTextStream(data).readAll(), QtGui.QColor(255, 0, 0) )
+            self.connect_button.setEnabled(True)
+            self.disconnect_button.setEnabled(False)
 
-    def sendFromPort(self, text):
-        self.port.write( text.encode() )
-        self.serialDataView.appendSerialText( text, QtGui.QColor(0, 0, 255) )
+    def connect_port(self):
+        if self.serial_port.isOpen():
+            self.text_edit.append("A porta já está conectada.")
+        else:
+            port_name = self.port_combobox.currentText()
+            self.serial_port.setPortName(port_name)
+            self.serial_port.setBaudRate(QSerialPort.Baud115200)
 
-class SerialDataView(QtWidgets.QWidget):
-    def __init__(self, parent):
-        super(SerialDataView, self).__init__(parent)
-        self.serialData = QtWidgets.QTextEdit(self)
-        self.serialData.setReadOnly(True)
-        self.serialData.setFontFamily('Courier New')
-        self.serialData.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+            if self.serial_port.open(QSerialPort.ReadWrite):
+                self.text_edit.append(f"Porta serial aberta em {port_name} com baud rate 115200.")
+                self.is_connected = True
+                self.update_connection_status()
+            else:
+                self.text_edit.append(f"Falha ao abrir porta serial em {port_name}. Motivo: {self.serial_port.errorString()}")
 
-        self.serialDataHex = QtWidgets.QTextEdit(self)
-        self.serialDataHex.setReadOnly(True)
-        self.serialDataHex.setFontFamily('Courier New')
-        self.serialDataHex.setFixedWidth(500)
-        self.serialDataHex.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+    def send_data(self):
+        if not self.serial_port.isOpen():
+            self.text_edit.append("A porta serial não está aberta.")
+            return
 
-        self.label = QtWidgets.QLabel('00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F')
-        self.label.setFont( QtGui.QFont('Courier New') )
-        self.label.setIndent(5)
+        data = self.data_input.text()
+        if self.hex_radio.isChecked():
+            try:
+                data = bytes.fromhex(data)
+            except ValueError:
+                self.text_edit.append("Erro: Dados em formato hexadecimal inválido.")
+                return
+        else:
+            data = data.encode('utf-8')
 
-        self.setLayout( QtWidgets.QGridLayout(self) )
-        self.layout().addWidget(self.serialData,    0, 0, 2, 1)
-        self.layout().addWidget(self.label,         0, 1, 1, 1)
-        self.layout().addWidget(self.serialDataHex, 1, 1, 1, 1)
-        self.layout().setContentsMargins(2, 2, 2, 2)
-        
-    def appendSerialText(self, appendText, color):
-        self.serialData.moveCursor(QtGui.QTextCursor.End)
-        self.serialData.setFontFamily('Courier New')
-        self.serialData.setTextColor(color)
-        self.serialDataHex.moveCursor(QtGui.QTextCursor.End)
-        self.serialDataHex.setFontFamily('Courier New')
-        self.serialDataHex.setTextColor(color)
+        if self.serial_port.write(data) == -1:
+            self.text_edit.append(f"Erro ao enviar dados para a porta serial. Motivo: {self.serial_port.errorString()}")
 
-        self.serialData.insertPlainText(appendText)
-        
-        lastData = self.serialDataHex.toPlainText().split('\n')[-1]
-        lastLength = math.ceil( len(lastData) / 3 )
-        
-        appendLists = []
-        splitedByTwoChar = re.split( '(..)', appendText.encode().hex() )[1::2]
-        if lastLength > 0:
-            t = splitedByTwoChar[ : 16-lastLength ] + ['\n']
-            appendLists.append( ' '.join(t) )
-            splitedByTwoChar = splitedByTwoChar[ 16-lastLength : ]
+        self.data_input.clear()
 
-        appendLists += [ ' '.join(splitedByTwoChar[ i*16 : (i+1)*16 ] + ['\n']) for i in range( math.ceil(len(splitedByTwoChar)/16) ) ]
-        if len(appendLists[-1]) < 47:
-            appendLists[-1] = appendLists[-1][:-1]
+    def send_data_enter_pressed(self):
+        self.send_data()
 
-        for insertText in appendLists:
-            self.serialDataHex.insertPlainText(insertText)
-        
-        self.serialData.moveCursor(QtGui.QTextCursor.End)
-        self.serialDataHex.moveCursor(QtGui.QTextCursor.End)
+    def send_predefined_data(self, data):
+        if not self.serial_port.isOpen():
+            self.text_edit.append("A porta serial não está aberta.")
+            return
 
-class SerialSendView(QtWidgets.QWidget):
+        if self.hex_radio.isChecked():
+            try:
+                data = bytes.fromhex(data)
+            except ValueError:
+                self.text_edit.append("Erro: Dados em formato hexadecimal inválido.")
+                return
+        else:
+            data = data.encode('utf-8')
 
-    serialSendSignal = QtCore.pyqtSignal(str)
+        if self.serial_port.write(data) == -1:
+            self.text_edit.append(f"Erro ao enviar dados para a porta serial. Motivo: {self.serial_port.errorString()}")
 
-    def __init__(self, parent):
-        super(SerialSendView, self).__init__(parent)
+    def receive_data(self):
+        data = self.serial_port.readAll()
+        ascii_data = data.data().decode('utf-8')
+        hex_data = data.toHex().data().decode('utf-8')
 
-        self.sendData = QtWidgets.QTextEdit(self)
-        self.sendData.setAcceptRichText(False)
-        self.sendData.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Preferred)
+        self.text_edit_ascii.insertPlainText(f"{ascii_data}")
+        self.text_edit_hex.insertPlainText(f"{hex_data}")
 
-        self.sendButton = QtWidgets.QPushButton('Send')
-        self.sendButton.clicked.connect(self.sendButtonClicked)
-        self.sendButton.setSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Preferred)
-        
-        self.setLayout( QtWidgets.QHBoxLayout(self) )
-        self.layout().addWidget(self.sendData)
-        self.layout().addWidget(self.sendButton)
-        self.layout().setContentsMargins(3, 3, 3, 3)
+        if b'\x0d' in data:
+            self.text_edit_hex.insertPlainText("\n")
 
-    def sendButtonClicked(self):
-        self.serialSendSignal.emit( self.sendData.toPlainText() )
-        self.sendData.clear()
+    def disconnect_all_ports(self):
+        if self.serial_port.isOpen():
+            self.serial_port.close()
+            self.text_edit.append("Porta serial desconectada.")
+            self.is_connected = False
+            self.update_connection_status()
 
-class ToolBar(QtWidgets.QToolBar):
-    def __init__(self, parent):
-        super(ToolBar, self).__init__(parent)
-        
-        self.portOpenButton = QtWidgets.QPushButton('Open')
-        self.portOpenButton.setCheckable(True)
-        self.portOpenButton.setMinimumHeight(32)
+    def update_display_format(self):
+        self.display_as_hex = self.hex_radio.isChecked()
 
-        self.portNames = QtWidgets.QComboBox(self)
-        self.portNames.addItems([ port.portName() for port in QSerialPortInfo().availablePorts() ])
-        self.portNames.setMinimumHeight(30)
+    def clear_text_edit(self):
+        self.text_edit.clear()
+        self.text_edit_ascii.clear()
+        self.text_edit_hex.clear()
 
-        self.baudRates = QtWidgets.QComboBox(self)
-        self.baudRates.addItems([
-            '110', '300', '600', '1200', '2400', '4800', '9600', '14400', '19200', '28800', 
-            '31250', '38400', '51200', '56000', '57600', '76800', '115200', '128000', '230400', '256000', '921600'
-        ])
-        self.baudRates.setCurrentText('115200')
-        self.baudRates.setMinimumHeight(30)
-
-        self.dataBits = QtWidgets.QComboBox(self)
-        self.dataBits.addItems(['5 bit', '6 bit', '7 bit', '8 bit'])
-        self.dataBits.setCurrentIndex(3)
-        self.dataBits.setMinimumHeight(30)
-
-        self._parity = QtWidgets.QComboBox(self)
-        self._parity.addItems(['No Parity', 'Even Parity', 'Odd Parity', 'Space Parity', 'Mark Parity'])
-        self._parity.setCurrentIndex(0)
-        self._parity.setMinimumHeight(30)
-
-        self.stopBits = QtWidgets.QComboBox(self)
-        self.stopBits.addItems(['One Stop', 'One And Half Stop', 'Two Stop'])
-        self.stopBits.setCurrentIndex(0)
-        self.stopBits.setMinimumHeight(30)
-
-        self._flowControl = QtWidgets.QComboBox(self)
-        self._flowControl.addItems(['No Flow Control', 'Hardware Control', 'Software Control'])
-        self._flowControl.setCurrentIndex(0)
-        self._flowControl.setMinimumHeight(30)
-
-        self.addWidget( self.portOpenButton )
-        self.addWidget( self.portNames)
-        self.addWidget( self.baudRates)
-        self.addWidget( self.dataBits)
-        self.addWidget( self._parity)
-        self.addWidget( self.stopBits)
-        self.addWidget( self._flowControl)
-
-    def serialControlEnable(self, flag):
-        self.portNames.setEnabled(flag)
-        self.baudRates.setEnabled(flag)
-        self.dataBits.setEnabled(flag)
-        self._parity.setEnabled(flag)
-        self.stopBits.setEnabled(flag)
-        self._flowControl.setEnabled(flag)
-        
-    def baudRate(self):
-        return int(self.baudRates.currentText())
-
-    def portName(self):
-        return self.portNames.currentText()
-
-    def dataBit(self):
-        return int(self.dataBits.currentIndex() + 5)
-
-    def parity(self):
-        return self._parity.currentIndex()
-
-    def stopBit(self):
-        return self.stopBits.currentIndex()
-
-    def flowControl(self):
-        return self._flowControl.currentIndex()
-
-if __name__ == '__main__':
-    app = QtWidgets.QApplication(sys.argv)
-    window = SerialMonitor()
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    window = SerialCommunication()
     window.show()
-    app.exec()
+    sys.exit(app.exec_())
