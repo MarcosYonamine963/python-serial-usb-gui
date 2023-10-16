@@ -36,7 +36,7 @@ class SerialCommunication(QMainWindow):
 
     def initUI(self):
         self.setWindowTitle("Serial Communication")
-        self.setGeometry(100, 100, 600, 400)
+        self.setGeometry(100, 100, 1000, 600)
 
         self.text_edit = QTextEdit(self)
         self.text_edit.setReadOnly(True)
